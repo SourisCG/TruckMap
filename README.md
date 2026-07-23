@@ -7,11 +7,14 @@ La aplicación no garantiza autorización legal de tránsito. Combina las restri
 ## Funcionalidad
 
 - Planificador con búsqueda de lugares en México.
+- Búsqueda de establecimientos, calles, cruces y direcciones exactas mediante TomTom Search.
+- Selección manual de origen y destino directamente sobre el mapa con geocodificación inversa.
 - Perfiles para rabón, torton, tractocamión y doble remolque.
 - Peso, peso por eje, número de ejes, altura, ancho, longitud y carga peligrosa.
 - Alternativas con distancia, tiempo, tráfico y detección de peaje.
 - Validación contra restricciones locales aprobadas.
-- Navegación GPS en primer plano, Wake Lock, voz y recálculo por desvío.
+- Navegación GPS en primer plano, cámara con seguimiento y rumbo, Wake Lock, voz y recálculo por desvío.
+- Tema automático, claro y oscuro con estilo nocturno del mapa.
 - Enlaces compartibles de origen y destino.
 - Formulario de reportes georreferenciados enviado por correo.
 - PWA instalable en Android y iPhone.
@@ -31,7 +34,9 @@ cp .env.example .env.local
 npm run dev
 ```
 
-Configura como mínimo `TOMTOM_API_KEY` y `NEXT_PUBLIC_TOMTOM_API_KEY`. Sin estas claves el mapa utiliza un fondo CARTO de demostración y la búsqueda muestra los principales municipios de Guanajuato, pero el cálculo de rutas queda bloqueado para evitar resultados inseguros.
+Configura como mínimo `TOMTOM_API_KEY` y `NEXT_PUBLIC_TOMTOM_API_KEY`. La clave privada debe tener asignados Routing, Search/Geocoding y los productos de mapas que se utilizarán. Sin estas claves el mapa utiliza un fondo CARTO de demostración y la búsqueda queda limitada a los principales municipios de Guanajuato; el cálculo de rutas queda bloqueado para evitar resultados inseguros.
+
+La búsqueda utiliza `language=es-419`, `countrySet=MX` e índices `POI,PAD,Addr,Str,Xstr,Geo`. Si TomTom responde con un error, la aplicación lo muestra como error del proveedor en lugar de ocultarlo como una lista de ciudades. En Vercel, las variables deben estar disponibles en el entorno de Production y se necesita un nuevo deployment después de modificarlas.
 
 Para sugerencias configura `RESEND_API_KEY`, `SUGGESTIONS_FROM_EMAIL` y `SUGGESTIONS_TO_EMAIL`. Turnstile y Upstash son opcionales localmente y recomendados en producción.
 
@@ -69,9 +74,11 @@ El procedimiento para incorporar restricciones está documentado en [`src/data/R
 ## Limitaciones
 
 - Requiere internet y la PWA abierta para navegación.
+- La navegación sigue el GPS, orienta la cámara hacia el rumbo y permite recentrarla; requiere la PWA abierta y pantalla activa.
 - No ofrece navegación con pantalla bloqueada ni mapas sin conexión.
 - No incluye cuentas, historial, rastreo de flotas o panel administrativo.
 - Las cuotas gratuitas limitan el número de búsquedas, rutas, mosaicos y recálculos.
+- La búsqueda exacta de calles y negocios requiere que la clave de TomTom tenga Search/Geocoding habilitado.
 - La cobertura legal municipal depende de recopilar y verificar publicaciones oficiales.
 - El service worker no guarda mosaicos de mapas de terceros.
 

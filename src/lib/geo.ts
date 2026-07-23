@@ -34,6 +34,18 @@ export function nearestPointIndex(point: Coordinate, line: Coordinate[]) {
   return { index: nearestIndex, distance: nearestDistance };
 }
 
+export function bearingDegrees(from: Coordinate, to: Coordinate) {
+  const fromLatitude = radians(from.lat);
+  const toLatitude = radians(to.lat);
+  const longitudeDelta = radians(to.lng - from.lng);
+  const y = Math.sin(longitudeDelta) * Math.cos(toLatitude);
+  const x =
+    Math.cos(fromLatitude) * Math.sin(toLatitude) -
+    Math.sin(fromLatitude) * Math.cos(toLatitude) * Math.cos(longitudeDelta);
+
+  return (Math.atan2(y, x) * 180 / Math.PI + 360) % 360;
+}
+
 function orientation(a: Coordinate, b: Coordinate, c: Coordinate) {
   return (b.lng - a.lng) * (c.lat - a.lat) - (b.lat - a.lat) * (c.lng - a.lng);
 }

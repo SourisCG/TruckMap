@@ -79,7 +79,8 @@ export async function calculateTomTomRoutes(
     computeTravelTimeFor: "all",
     routeRepresentation: "polyline",
     instructionsType: "text",
-    language: "es-MX",
+    language: "es-419",
+    sectionType: "toll",
     maxAlternatives: "2",
     vehicleCommercial: "true",
     vehicleWeight: String(vehicle.currentWeightKg),
@@ -103,7 +104,7 @@ export async function calculateTomTomRoutes(
     throw new Error(payload.error?.description || "No fue posible calcular una ruta compatible.");
   }
 
-  return payload.routes.map((route, index) => {
+  const routes = payload.routes.map((route, index) => {
     const points = route.legs.flatMap((leg, legIndex) =>
       leg.points
         .slice(legIndex === 0 ? 0 : 1)
@@ -114,7 +115,9 @@ export async function calculateTomTomRoutes(
       distanceMeters: route.summary.lengthInMeters,
       durationSeconds: route.summary.travelTimeInSeconds,
       trafficDelaySeconds: route.summary.trafficDelayInSeconds ?? 0,
-      hasTolls: route.sections?.some((section) => section.sectionType === "TOLL_ROAD") ?? false,
+      hasTolls: route.sections?.some(
+        (section) => section.sectionType === "TOLL" || section.sectionType === "TOLL_ROAD",
+      ) ?? false,
       points,
       instructions: (route.guidance?.instructions ?? []).map((instruction, instructionIndex) =>
         normalizeInstruction(instruction, instructionIndex, points),
@@ -122,4 +125,10 @@ export async function calculateTomTomRoutes(
       validation: validateRoute(points, vehicle),
     };
   });
+
+  if (!routes.some((route) => route.points.length > 1)) {
+    throw new Error("TomTom devolvió una ruta sin geometría dibujable.");
+  }
+
+  return routes;
 }

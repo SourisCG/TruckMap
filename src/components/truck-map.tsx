@@ -7,8 +7,15 @@ import {
   useState,
 } from "react";
 
-import { distanceMeters, nearestPointIndex } from "@/lib/geo";
-import type { Coordinate, Place, RouteAlternative, VehicleProfile } from "@/lib/types";
+import { bearingDegrees, distanceMeters, nearestPointIndex } from "@/lib/geo";
+import type {
+  Coordinate,
+  Place,
+  PositionFix,
+  RouteAlternative,
+  VehicleProfile,
+} from "@/lib/types";
+import { resolveTheme, type ResolvedTheme, type ThemePreference } from "@/lib/theme";
 import { DEFAULT_VEHICLE, vehicleProfileSchema } from "@/lib/vehicle";
 import { MapView } from "@/components/map-view";
 import { PlaceSearch } from "@/components/place-search";
@@ -39,12 +46,18 @@ export function TruckMap() {
   const [vehicleOpen, setVehicleOpen] = useState(false);
   const [navigating, setNavigating] = useState(false);
   const [voiceEnabled, setVoiceEnabled] = useState(true);
-  const [currentPosition, setCurrentPosition] = useState<Coordinate | null>(null);
+  const [currentPosition, setCurrentPosition] = useState<PositionFix | null>(null);
   const [reporting, setReporting] = useState(false);
   const [reportPoint, setReportPoint] = useState<Coordinate | null>(null);
   const [shareStatus, setShareStatus] = useState("");
+  const [selectionMode, setSelectionMode] = useState<"origin" | "destination" | null>(null);
+  const [followCamera, setFollowCamera] = useState(true);
+  const [recenterRequest, setRecenterRequest] = useState(0);
+  const [themePreference, setThemePreference] = useState<ThemePreference>("system");
+  const [resolvedTheme, setResolvedTheme] = useState<ResolvedTheme>("light");
   const deviationSamples = useRef(0);
   const lastRerouteAt = useRef(0);
+  const lastFixRef = useRef<PositionFix | null>(null);
 
   const selectedRoute = routes.find((route) => route.id === selectedRouteId) ?? routes[0] ?? null;
   const progress = selectedRoute && currentPosition
@@ -69,6 +82,34 @@ export function TruckMap() {
       window.localStorage.removeItem("truckmap-vehicle");
     }
   }, []);
+
+  useEffect(() => {
+    const saved = window.localStorage.getItem("truckmap-theme");
+    const preference: ThemePreference = saved === "light" || saved === "dark" ? saved : "system";
+    const media = window.matchMedia("(prefers-color-scheme: dark)");
+    queueMicrotask(() => {
+      setThemePreference(preference);
+      setResolvedTheme(resolveTheme(preference, media.matches));
+    });
+  }, []);
+
+  useEffect(() => {
+    const media = window.matchMedia("(prefers-color-scheme: dark)");
+    const update = () => setResolvedTheme(resolveTheme(themePreference, media.matches));
+    queueMicrotask(update);
+    const handleChange = () => update();
+    media.addEventListener("change", handleChange);
+    return () => media.removeEventListener("change", handleChange);
+  }, [themePreference]);
+
+  useEffect(() => {
+    window.localStorage.setItem("truckmap-theme", themePreference);
+    document.documentElement.dataset.theme = resolvedTheme;
+    document.querySelector('meta[name="theme-color"]')?.setAttribute(
+      "content",
+      resolvedTheme === "dark" ? "#0c1d25" : "#112a35",
+    );
+  }, [resolvedTheme, themePreference]);
 
   useEffect(() => {
     const parameters = new URLSearchParams(window.location.search);
@@ -147,14 +188,22 @@ export function TruckMap() {
     setError("");
     navigator.geolocation.getCurrentPosition(
       ({ coords }) => {
+        const point = { lat: coords.latitude, lng: coords.longitude };
         const place: Place = {
           id: "current-location",
           label: "Mi ubicación actual",
-          lat: coords.latitude,
-          lng: coords.longitude,
+          ...point,
+        };
+        const position: PositionFix = {
+          ...point,
+          accuracy: coords.accuracy,
+          heading: Number.isFinite(coords.heading) ? coords.heading : null,
+          speed: Number.isFinite(coords.speed) ? coords.speed : null,
+          timestamp: Date.now(),
         };
         setOrigin(place);
-        setCurrentPosition(place);
+        lastFixRef.current = position;
+        setCurrentPosition(position);
       },
       () => setError("Activa el permiso de ubicación para usar tu posición."),
       { enableHighAccuracy: true, timeout: 12_000, maximumAge: 15_000 },
@@ -173,9 +222,19 @@ export function TruckMap() {
     }
     const watchId = navigator.geolocation.watchPosition(
       ({ coords }) => {
-        const position = { lat: coords.latitude, lng: coords.longitude };
+        const point = { lat: coords.latitude, lng: coords.longitude };
+        const previous = lastFixRef.current;
+        const gpsHeading = Number.isFinite(coords.heading) ? coords.heading : null;
+        const position: PositionFix = {
+          ...point,
+          accuracy: coords.accuracy,
+          heading: gpsHeading ?? (previous ? bearingDegrees(previous, point) : null),
+          speed: Number.isFinite(coords.speed) ? coords.speed : null,
+          timestamp: Date.now(),
+        };
+        lastFixRef.current = position;
         setCurrentPosition(position);
-        if (destination && distanceMeters(position, destination) <= 45) {
+        if (destination && distanceMeters(point, destination) <= 45) {
           setNavigating(false);
           if (voiceEnabled && "speechSynthesis" in window) {
             window.speechSynthesis.speak(
@@ -229,7 +288,48 @@ export function TruckMap() {
       return;
     }
     setError("");
+    setFollowCamera(true);
+    setRecenterRequest((request) => request + 1);
     setNavigating(true);
+  }
+
+  function recenterNavigation() {
+    setFollowCamera(true);
+    setRecenterRequest((request) => request + 1);
+  }
+
+  async function selectPointOnMap(point: Coordinate) {
+    const target = selectionMode;
+    if (!target) return;
+    setSelectionMode(null);
+    setError("");
+
+    try {
+      const response = await fetch(`/api/reverse-geocode?lat=${point.lat}&lng=${point.lng}`);
+      const result = (await response.json()) as { place?: Place; error?: string };
+      if (!response.ok) throw new Error(result.error || "No fue posible identificar el punto.");
+      const place: Place = result.place ?? {
+        id: `map-${point.lat}-${point.lng}`,
+        label: "Punto seleccionado en el mapa",
+        resultLabel: "Punto del mapa",
+        resultType: "map",
+        source: "map",
+        ...point,
+      };
+      if (target === "origin") setOrigin(place);
+      else setDestination(place);
+    } catch {
+      const place: Place = {
+        id: `map-${point.lat}-${point.lng}`,
+        label: "Punto seleccionado en el mapa",
+        resultLabel: "Punto del mapa",
+        resultType: "map",
+        source: "map",
+        ...point,
+      };
+      if (target === "origin") setOrigin(place);
+      else setDestination(place);
+    }
   }
 
   async function shareRoute() {
@@ -264,7 +364,14 @@ export function TruckMap() {
         selectedRouteId={selectedRoute?.id ?? null}
         currentPosition={currentPosition}
         reporting={reporting}
+        selectionMode={selectionMode}
         reportPoint={reportPoint}
+        navigationActive={navigating}
+        followCamera={followCamera}
+        recenterRequest={recenterRequest}
+        theme={resolvedTheme}
+        onSelectPoint={(point) => void selectPointOnMap(point)}
+        onUserMove={() => setFollowCamera(false)}
         onMapClick={(point) => {
           setReportPoint(point);
           setReporting(false);
@@ -278,6 +385,18 @@ export function TruckMap() {
           <small>MÉXICO</small>
         </div>
         <span className="beta-badge">BETA GUANAJUATO</span>
+        <label className="theme-control">
+          <span className="sr-only">Tema</span>
+          <select
+            aria-label="Tema de la aplicación"
+            value={themePreference}
+            onChange={(event) => setThemePreference(event.target.value as ThemePreference)}
+          >
+            <option value="system">Automático</option>
+            <option value="light">Claro</option>
+            <option value="dark">Oscuro</option>
+          </select>
+        </label>
       </header>
 
       {!navigating && (
@@ -300,6 +419,11 @@ export function TruckMap() {
               placeholder="Ciudad, empresa o dirección"
               value={origin}
               onSelect={setOrigin}
+              onChooseOnMap={() => {
+                setReporting(false);
+                setSelectionMode("origin");
+              }}
+              searchCenter={currentPosition}
             />
             <button
               type="button"
@@ -317,6 +441,11 @@ export function TruckMap() {
               placeholder="¿A dónde vas?"
               value={destination}
               onSelect={setDestination}
+              onChooseOnMap={() => {
+                setReporting(false);
+                setSelectionMode("destination");
+              }}
+              searchCenter={currentPosition}
             />
           </div>
 
@@ -403,6 +532,7 @@ export function TruckMap() {
             <span><strong>{formatDuration(selectedRoute.durationSeconds * (1 - progressRatio))}</strong><small>restantes</small></span>
             <span><strong>{formatDistance(selectedRoute.distanceMeters * (1 - progressRatio))}</strong><small>distancia</small></span>
             <button type="button" onClick={() => setVoiceEnabled(!voiceEnabled)}>{voiceEnabled ? "Voz activa" : "Voz apagada"}</button>
+            {!followCamera && <button type="button" onClick={recenterNavigation}>Recentrar</button>}
             <button type="button" className="stop-navigation" onClick={() => setNavigating(false)}>Salir</button>
           </div>
         </section>
@@ -413,6 +543,7 @@ export function TruckMap() {
         className={reporting ? "report-button active" : "report-button"}
         onClick={() => {
           setReporting(!reporting);
+          setSelectionMode(null);
           setReportPoint(null);
         }}
       >
@@ -420,7 +551,13 @@ export function TruckMap() {
         {reporting ? "Toca el punto en el mapa" : "Reportar"}
       </button>
 
-      {reporting && <div className="map-prompt">Selecciona en el mapa el lugar de la sugerencia</div>}
+      {(reporting || selectionMode) && (
+        <div className="map-prompt">
+          {selectionMode
+            ? `Toca el mapa para elegir ${selectionMode === "origin" ? "el origen" : "el destino"}`
+            : "Selecciona en el mapa el lugar de la sugerencia"}
+        </div>
+      )}
       <SuggestionDialog point={reportPoint} onClose={() => setReportPoint(null)} />
     </main>
   );

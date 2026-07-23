@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { distanceMeters, linesIntersect, nearestPointIndex } from "@/lib/geo";
+import { bearingDegrees, distanceMeters, linesIntersect, nearestPointIndex } from "@/lib/geo";
 
 describe("geo utilities", () => {
   it("calculates a plausible distance between León and Silao", () => {
@@ -32,5 +32,9 @@ describe("geo utilities", () => {
         ],
       ).index,
     ).toBe(1);
+  });
+
+  it("calculates a compass heading", () => {
+    expect(bearingDegrees({ lat: 20, lng: -101 }, { lat: 20, lng: -100 })).toBeCloseTo(89.8, 0);
   });
 });

@@ -2,19 +2,8 @@ import { NextRequest, NextResponse } from "next/server";
 
 import { GUANAJUATO_PLACES } from "@/data/places";
 import { checkRateLimit, requestIp } from "@/lib/rate-limit";
-import type { Place } from "@/lib/types";
-
-type TomTomSearchResponse = {
-  results?: Array<{
-    id: string;
-    position: { lat: number; lon: number };
-    address: {
-      freeformAddress: string;
-      municipality?: string;
-      countrySubdivision?: string;
-    };
-  }>;
-};
+import { TomTomSearchError, searchTomTom } from "@/lib/tomtom-search";
+import type { Coordinate } from "@/lib/types";
 
 function localSearch(query: string) {
   const normalize = (value: string) =>
@@ -23,56 +12,52 @@ function localSearch(query: string) {
       .replace(/\p{Diacritic}/gu, "")
       .toLocaleLowerCase("es-MX");
   const normalized = normalize(query);
-  return GUANAJUATO_PLACES.filter((place) =>
-    normalize(place.label).includes(normalized),
-  ).slice(0, 5);
+  return GUANAJUATO_PLACES.filter((place) => normalize(place.label).includes(normalized))
+    .map((place) => ({ ...place, resultLabel: "Municipio", source: "local" as const }))
+    .slice(0, 5);
+}
+
+function parseCenter(request: NextRequest): Coordinate {
+  const lat = Number(request.nextUrl.searchParams.get("lat"));
+  const lng = Number(request.nextUrl.searchParams.get("lng"));
+  if (lat >= 14 && lat <= 33 && lng >= -119 && lng <= -86) return { lat, lng };
+  return { lat: 20.875, lng: -101.2 };
 }
 
 export async function GET(request: NextRequest) {
   const query = request.nextUrl.searchParams.get("q")?.trim() ?? "";
   if (query.length < 2 || query.length > 120) {
-    return NextResponse.json({ places: [] });
+    return NextResponse.json({ places: [], source: "none" });
   }
 
   const allowed = await checkRateLimit(`search:${requestIp(request.headers)}`, 120, 60 * 60);
   if (!allowed) {
-    return NextResponse.json({ error: "Demasiadas búsquedas." }, { status: 429 });
+    return NextResponse.json(
+      { code: "SEARCH_RATE_LIMITED", error: "Demasiadas búsquedas. Intenta más tarde." },
+      { status: 429 },
+    );
   }
 
-  const apiKey = process.env.TOMTOM_API_KEY;
-  if (!apiKey) {
-    return NextResponse.json({ places: localSearch(query), source: "local" });
+  if (!process.env.TOMTOM_API_KEY) {
+    return NextResponse.json({
+      places: localSearch(query),
+      source: "local",
+      limited: true,
+      warning: "Búsqueda limitada a municipios de Guanajuato porque TomTom no está configurado.",
+    });
   }
 
   try {
-    const url = new URL(
-      `https://api.tomtom.com/search/2/search/${encodeURIComponent(query)}.json`,
+    const places = await searchTomTom(query, parseCenter(request), AbortSignal.timeout(8_000));
+    return NextResponse.json({ places, source: "tomtom", limited: false });
+  } catch (error) {
+    if (error instanceof TomTomSearchError) {
+      const status = error.status >= 400 && error.status <= 599 ? error.status : 503;
+      return NextResponse.json({ code: error.code, error: error.message, source: "tomtom" }, { status });
+    }
+    return NextResponse.json(
+      { code: "SEARCH_UNAVAILABLE", error: "No fue posible consultar direcciones.", source: "tomtom" },
+      { status: 503 },
     );
-    url.searchParams.set("key", apiKey);
-    url.searchParams.set("countrySet", "MX");
-    url.searchParams.set("lat", "20.875");
-    url.searchParams.set("lon", "-101.2");
-    url.searchParams.set("radius", "500000");
-    url.searchParams.set("limit", "5");
-    url.searchParams.set("language", "es-MX");
-
-    const response = await fetch(url, {
-      cache: "no-store",
-      signal: AbortSignal.timeout(8_000),
-    });
-    if (!response.ok) throw new Error("Search provider error");
-    const data = (await response.json()) as TomTomSearchResponse;
-    const places: Place[] = (data.results ?? []).map((result) => ({
-      id: result.id,
-      label: `${result.address.freeformAddress}${
-        result.address.countrySubdivision ? `, ${result.address.countrySubdivision}` : ""
-      }`,
-      municipality: result.address.municipality,
-      lat: result.position.lat,
-      lng: result.position.lon,
-    }));
-    return NextResponse.json({ places, source: "tomtom" });
-  } catch {
-    return NextResponse.json({ places: localSearch(query), source: "local" });
   }
 }

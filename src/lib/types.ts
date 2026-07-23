@@ -7,6 +7,17 @@ export type Place = Coordinate & {
   id: string;
   label: string;
   municipality?: string;
+  resultType?: "POI" | "Point Address" | "Address Range" | "Street" | "Cross Street" | "Geography" | "map";
+  resultLabel?: string;
+  source?: "tomtom" | "local" | "map";
+  entryPoint?: Coordinate;
+};
+
+export type PositionFix = Coordinate & {
+  accuracy: number;
+  heading: number | null;
+  speed: number | null;
+  timestamp: number;
 };
 
 export type HazardousLoad =
