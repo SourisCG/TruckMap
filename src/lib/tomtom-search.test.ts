@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 
-import { searchTomTom, TomTomSearchError } from "@/lib/tomtom-search";
+import { reverseGeocodeTomTom, searchTomTom, TomTomSearchError } from "@/lib/tomtom-search";
 
 describe("TomTom search adapter", () => {
   afterEach(() => {
@@ -59,5 +59,62 @@ describe("TomTom search adapter", () => {
       status: 403,
       code: "SEARCH_UNAUTHORIZED",
     } satisfies Partial<TomTomSearchError>);
+  });
+});
+
+describe("TomTom reverse geocode adapter", () => {
+  afterEach(() => {
+    vi.unstubAllGlobals();
+    vi.unstubAllEnvs();
+  });
+
+  it("parses the addresses payload with a string position", async () => {
+    vi.stubEnv("TOMTOM_API_KEY", "test-key");
+    let requestedUrl = "";
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (input: URL) => {
+        requestedUrl = input.toString();
+        return new Response(
+          JSON.stringify({
+            addresses: [
+              {
+                address: {
+                  municipality: "León",
+                  countrySubdivision: "Guanajuato",
+                  postalCode: "37000",
+                  freeformAddress: "Av. López Mateos 100, Centro, 37000, León, Guanajuato",
+                },
+                position: "21.121972,-101.6832",
+              },
+            ],
+          }),
+          { status: 200 },
+        );
+      }),
+    );
+
+    const place = await reverseGeocodeTomTom({ lat: 21.121972, lng: -101.6832 });
+
+    const url = new URL(requestedUrl);
+    expect(url.pathname).toContain("/reverseGeocode/21.121972,-101.6832.json");
+    expect(url.searchParams.get("radius")).toBe("50");
+    expect(place).toMatchObject({
+      label: "Av. López Mateos 100, Centro, 37000, León, Guanajuato",
+      resultLabel: "Dirección",
+      municipality: "León",
+      lat: 21.121972,
+      lng: -101.6832,
+    });
+  });
+
+  it("returns null when the provider has no address for the point", async () => {
+    vi.stubEnv("TOMTOM_API_KEY", "test-key");
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () => new Response(JSON.stringify({ addresses: [] }), { status: 200 })),
+    );
+
+    await expect(reverseGeocodeTomTom({ lat: 21.5, lng: -101.2 })).resolves.toBeNull();
   });
 });

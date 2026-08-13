@@ -25,6 +25,22 @@ type TomTomSearchResponse = {
   error?: { description?: string };
 };
 
+type TomTomReverseAddress = {
+  address?: {
+    freeformAddress?: string;
+    municipality?: string;
+    municipalitySubdivision?: string;
+    countrySubdivision?: string;
+    postalCode?: string;
+  };
+  position?: string;
+};
+
+type TomTomReverseGeocodeResponse = {
+  addresses?: TomTomReverseAddress[];
+  error?: { description?: string };
+};
+
 export class TomTomSearchError extends Error {
   readonly status: number;
   readonly code: string;
@@ -171,6 +187,54 @@ export async function reverseGeocodeTomTom(point: Coordinate, signal?: AbortSign
   url.searchParams.set("language", "es-419");
   url.searchParams.set("radius", "50");
 
-  const results = await request(url, signal);
-  return results.map(normalizeResult).filter((place): place is Place => place !== null)[0] ?? null;
+  let response: Response;
+  try {
+    response = await fetch(url, {
+      signal,
+      cache: "no-store",
+      headers: { Accept: "application/json" },
+    });
+  } catch (error) {
+    if (error instanceof Error && (error.name === "AbortError" || error.name === "TimeoutError")) {
+      throw new TomTomSearchError(504, "SEARCH_TIMEOUT", "La búsqueda tardó demasiado.");
+    }
+    throw new TomTomSearchError(503, "SEARCH_UNAVAILABLE", "El servicio de búsqueda no está disponible.");
+  }
+
+  let payload: TomTomReverseGeocodeResponse = {};
+  try {
+    payload = (await response.json()) as TomTomReverseGeocodeResponse;
+  } catch {
+    if (!response.ok) {
+      throw new TomTomSearchError(response.status, errorCode(response.status), "TomTom rechazó la búsqueda.");
+    }
+  }
+
+  if (!response.ok) {
+    throw new TomTomSearchError(
+      response.status,
+      errorCode(response.status),
+      payload.error?.description || "TomTom rechazó la búsqueda.",
+    );
+  }
+
+  const first = payload.addresses?.find(
+    (entry) => entry.position && entry.address?.freeformAddress,
+  );
+  if (!first) return null;
+
+  const [lat, lng] = first.position!.split(",").map(Number);
+  if (!Number.isFinite(lat) || !Number.isFinite(lng)) return null;
+
+  const address = first.address!;
+  return {
+    id: `reverse-${lat}-${lng}`,
+    label: address.freeformAddress!,
+    resultLabel: "Dirección",
+    resultType: "Point Address",
+    source: "tomtom",
+    municipality: address.municipality,
+    lat,
+    lng,
+  } satisfies Place;
 }
